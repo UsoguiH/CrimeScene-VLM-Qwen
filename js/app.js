@@ -1014,7 +1014,15 @@ function frameToJpeg(maxSide) {
 
 function qwenCreds() {
   const apiKey = els.apiKey.value.trim();
-  if (!apiKey) { toast('Set an OpenRouter API key in the VLM panel first'); return null; }
+  if (!apiKey) {
+    // guide the user straight to the key field instead of a dead-end toast
+    S.vlmMode = 'api';
+    updateVlmUi();
+    els.vlmCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    els.apiKey.focus();
+    toast('Qwen features need an OpenRouter API key — paste it in the highlighted field');
+    return null;
+  }
   return { apiKey, model: els.apiModel.value.trim() || DEFAULT_MODEL };
 }
 
