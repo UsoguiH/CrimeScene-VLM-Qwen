@@ -1,0 +1,10 @@
+# local secrets — API keys live here, never in source
+config.local.js
+
+node_modules/
+
+# local model downloads — the app loads models from the HF hub at runtime
+models/
+
+# generated test asset — rebuild with: node make-testcam.mjs
+testcam.mjpeg

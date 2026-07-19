@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence // Live Detection &amp; Measurement</title>
+<link rel="stylesheet" href="./css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
+</head>
+<body>
+
+<header>
+  <div class="brand">EVIDENCE <span>//</span> LIVE DETECTION &amp; MEASUREMENT</div>
+  <div class="chips">
+    <span class="chip" id="chip-detector">loading models…</span>
+    <span class="chip" id="chip-backend">detecting GPU…</span>
+    <span class="chip" id="chip-fps">— fps</span>
+    <button class="chip chip-btn" id="btn-dashboard">📋 Dashboard <span id="dash-count">0</span></button>
+  </div>
+</header>
+
+<div id="load-status" hidden></div>
+
+<main>
+  <section class="stage-col">
+    <div id="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="frame"></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="stage-msg">requesting camera…</div>
+    </div>
+
+    <div class="controls">
+      <select id="camera-select" title="Camera"><option>camera…</option></select>
+      <button id="btn-flip" title="Toggle front / back camera">🔄 Flip</button>
+      <button id="btn-snapshot" title="Export annotated snapshot as PNG">📸 Snapshot</button>
+      <button id="btn-clear" title="Clear measurements">🧹 Clear</button>
+      <label class="toggle" title="Depth Anything V2 overlay (loads ~50 MB on first use)">
+        <input type="checkbox" id="depth-toggle"> depth overlay
+      </label>
+      <label class="slider-label">threshold
+        <input type="range" id="threshold" min="0.25" max="0.9" step="0.05" value="0.5">
+        <span id="threshold-val">0.50</span>
+      </label>
+      <select id="det-model" title="Detector size — bigger is more accurate but slower">
+        <option value="nano">RF-DETR nano (fastest)</option>
+        <option value="small">RF-DETR small (sharper)</option>
+        <option value="medium">RF-DETR medium (best, slower)</option>
+      </select>
+    </div>
+
+    <div class="hint">
+      Click any object in the view → it's instantly registered to the dashboard and identified by Qwen.
+      For real-world sizes, calibrate first: pick a reference, then click its two ends (panel →).
+    </div>
+  </section>
+
+  <aside class="panel">
+
+    <div class="card">
+      <h2>📐 Calibration</h2>
+      <select id="calib-mode">
+        <option value="plane">Reference object in frame (accurate)</option>
+        <option value="pinhole">Known camera distance (approximate)</option>
+        <option value="none">None — pixel units only</option>
+      </select>
+
+      <div id="calib-plane-ui">
+        <select id="ref-preset"></select>
+        <div id="custom-dims" hidden>
+          <input type="number" id="custom-long" placeholder="long side (mm)" min="1">
+          <input type="number" id="custom-short" placeholder="short side (mm)" min="1">
+        </div>
+        <button id="btn-set-ref">◎ Set reference (2 clicks)</button>
+      </div>
+
+      <div id="calib-pinhole-ui" hidden>
+        <label>distance to subject <input type="number" id="distance-cm" value="60" min="5"> cm</label>
+        <label>camera horizontal FOV <input type="number" id="hfov-deg" value="63" min="20" max="140"> °</label>
+        <div class="dim">size = pixels × distance / focal. Typical laptop cams: 60–70°.</div>
+      </div>
+
+      <div id="calib-status" class="calib-status">Not calibrated</div>
+    </div>
+
+    <div class="card">
+      <h2>🎯 Live detections <span class="dim">RF-DETR nano</span></h2>
+      <div id="detections-list" class="list"><div class="empty">waiting for model…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>📏 Registered items</h2>
+      <div id="measure-list" class="list"></div>
+    </div>
+
+    <div class="card" id="vlm-card">
+      <h2>🧠 VLM analysis <span class="dim">Qwen3-VL</span></h2>
+      <select id="vlm-mode">
+        <option value="api">OpenRouter API — Qwen3-VL-235B (fast)</option>
+        <option value="local">Local in-browser — Qwen3-VL-2B (private, no internet after load)</option>
+      </select>
+      <div id="vlm-api-ui" hidden>
+        <input type="password" id="api-key" placeholder="OpenRouter API key (sk-or-…)" autocomplete="off">
+        <input type="text" id="api-model" value="qwen/qwen3-vl-235b-a22b-instruct" title="OpenRouter model id">
+      </div>
+      <div id="vlm-local-ui" hidden>
+        <button id="btn-load-vlm">⬇ Load Qwen3-VL (~1.1 GB, cached after first load)</button>
+        <div id="vlm-progress" hidden>
+          <div class="progress-track"><div class="progress-bar" id="vlm-progress-bar"></div></div>
+          <div class="dim" id="vlm-progress-text">starting…</div>
+        </div>
+      </div>
+      <div id="vlm-controls" hidden>
+        <textarea id="vlm-question" rows="2" placeholder="optional custom question — empty = full evidence report"></textarea>
+        <button id="btn-analyze">🔍 Analyze current frame</button>
+      </div>
+      <pre id="vlm-output" hidden></pre>
+      <button id="btn-copy-report" class="mini" hidden>📋 copy report</button>
+    </div>
+
+    <div class="card credits">
+      100% in-browser &amp; open source ·
+      <a href="https://huggingface.co/onnx-community/rfdetr_nano-ONNX" target="_blank">RF-DETR</a> ·
+      <a href="https://huggingface.co/onnx-community/depth-anything-v2-small" target="_blank">Depth Anything V2</a> ·
+      <a href="https://huggingface.co/onnx-community/Qwen3-VL-2B-Instruct-ONNX" target="_blank">Qwen3-VL</a> ·
+      <a href="https://github.com/huggingface/transformers.js" target="_blank">transformers.js</a>
+    </div>
+
+  </aside>
+</main>
+
+<div id="dashboard" hidden>
+  <div class="dash-inner">
+    <div class="dash-head">
+      <h1>📋 EVIDENCE REGISTRY</h1>
+      <label class="toggle"><input type="checkbox" id="auto-id-toggle" checked> auto-identify with VLM</label>
+      <div class="dash-actions">
+        <button id="btn-export-json" class="mini">⬇ JSON</button>
+        <button id="btn-export-csv" class="mini">⬇ CSV</button>
+        <button id="btn-clear-registry" class="mini">🗑 clear all</button>
+        <button id="btn-dash-close" class="mini">✕ close</button>
+      </div>
+    </div>
+    <div class="dash-stats" id="dash-stats"></div>
+    <div class="dash-table-wrap">
+      <table class="dash-table">
+        <thead>
+          <tr><th></th><th>ID</th><th>Name</th><th>AI identification</th><th>Size</th><th>Registered</th><th>Notes</th><th></th></tr>
+        </thead>
+        <tbody id="dash-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="./config.local.js"></script>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
