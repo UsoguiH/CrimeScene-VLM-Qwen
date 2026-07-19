@@ -7,8 +7,11 @@ running **100% in the browser** — no server-side inference, no data leaves the
 |---|---|---|
 | Real-time object detection | **RF-DETR nano/small/medium** (ICLR 2026, Apache-2.0) | every frame |
 | Click-to-register (< 2 s) | detection boxes, no extra model | instant on click |
+| **Find anything by text** | **Qwen3-VL grounding** — open-vocabulary boxes beyond the 80 COCO classes | on search |
+| **Scan scene** | **Qwen3-VL** locates every object → bulk-registers all | one click |
+| Structured evidence records | **Qwen3-VL** — name, category, color, material, condition, markings, OCR text | per item |
 | Depth overlay | **Depth Anything V2 small** (Apache-2.0) | toggle |
-| Evidence report + item ID (VLM) | **Qwen3-VL** — local 2B in-browser, or 235B via OpenRouter API | on demand / per item |
+| Evidence report (VLM) | **Qwen3-VL** — local 2B in-browser, or 235B via OpenRouter API | on demand |
 
 Runtime: [transformers.js v4](https://github.com/huggingface/transformers.js) +
 ONNX Runtime Web on **WebGPU** (WASM fallback). Models download from the Hugging Face
@@ -45,17 +48,30 @@ requires `localhost` or HTTPS.
 6. **Analyze** writes a structured evidence report from the current frame +
    detections + measurements (OpenRouter API mode or fully-local 2B mode).
 
-## Evidence dashboard
+## Find & Scan (Qwen3-VL grounding)
 
-Every click-measurement **auto-registers an evidence item**: sequential ID (EV-001…),
-cropped thumbnail, dimensions, mask confidence, calibration mode, timestamp, and
-editable name/notes. Open it with the **📋 Dashboard** button in the header:
+- **🔍 Find**: type anything — "knife", "red bottle", "shell casing" — and Qwen3-VL
+  returns bounding boxes for every match (0–1000 normalized grounding coordinates,
+  converted to the camera frame). Found boxes appear in fuchsia; click one to
+  register it. This works for objects far beyond the detector's 80 COCO classes.
+- **📸 Scan scene**: Qwen locates every distinct object in view and all of them are
+  registered to the dashboard in one go — a full evidence inventory in one click.
 
+## Evidence dashboard (side tabs)
+
+Every click **auto-registers an evidence item**: sequential ID (EV-001…), cropped
+thumbnail, dimensions, calibration mode, timestamp, and editable name/notes.
+Open it with the **📋 Dashboard** button:
+
+- **📋 Registry** — full table: thumbnail, ID, name, category, AI details
+  (color/material/condition/markings + OCR'd text), size, time, notes.
+- **🖼 Gallery** — visual card grid of all items.
+- **📊 Stats** — headline tiles and items-by-category bars.
+- **📤 Export** — JSON / CSV download (all structured fields) and clear-all.
 - Items persist in browser localStorage across reloads.
-- **Auto-identify with VLM**: when an OpenRouter key is configured, each new item's
-  crop is sent to Qwen3-VL for a precise one-line identification (name, color,
-  markings) — far beyond the detector's 80 COCO labels. Toggleable in the dashboard.
-- Export the registry as **JSON** or **CSV**; edit names/notes inline; re-run ID per item.
+- **Structured auto-identify**: each new item's crop goes to Qwen3-VL, which returns
+  JSON — name, category, color, material, condition, markings, and any readable
+  text/serials (OCR) — filling the registry automatically. Toggleable.
 
 ## Performance notes
 
@@ -89,7 +105,8 @@ The VLM card has two modes (dropdown):
 ## Tests
 
 `test-e2e.mjs` drives the real app in headless Edge with a fake camera feed
-(a photo of cats), asserting 28 checks end-to-end — including a hard
+(a photo of cats), asserting 35 checks end-to-end — including live Qwen grounding
+(find-by-text + scan-scene), structured records, dashboard tabs, and a hard
 "< 2 s click-to-dashboard" timing assertion. Requires `puppeteer-core`
 (`npm i puppeteer-core`) and Microsoft Edge.
 
