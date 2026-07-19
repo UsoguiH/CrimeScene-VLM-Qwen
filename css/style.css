@@ -85,7 +85,9 @@ main {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+  flex-wrap: wrap; /* buttons drop below the input on narrow screens */
 }
+.findbar input { min-width: 200px; }
 .findbar input {
   flex: 1;
   background: var(--card);
@@ -201,6 +203,8 @@ input[type="range"] { accent-color: var(--accent); width: 110px; }
 .ok { color: var(--ok); }
 
 .card select, .card input, .card textarea, .card button { width: 100%; }
+/* …but never stretch buttons that live inside list rows */
+.card .list button, .card button.mini { width: auto; }
 #custom-dims { display: flex; gap: 8px; }
 .card label { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
 .card label input { width: 80px; }
@@ -488,7 +492,8 @@ button.danger:hover { border-color: var(--err); color: var(--err); }
   display: block;
 }
 .dash-id { color: var(--accent); font-weight: 700; white-space: nowrap; }
-.dash-ai { color: var(--dim); max-width: 240px; line-height: 1.4; }
+.dash-ai { color: var(--dim); min-width: 240px; max-width: 360px; line-height: 1.4; }
+.dash-table td:nth-child(3) { min-width: 150px; }
 .dash-size { color: var(--accent); white-space: nowrap; }
 .dash-time { color: var(--dim); white-space: nowrap; font-size: 11.5px; }
 
@@ -500,6 +505,14 @@ button.danger:hover { border-color: var(--err); color: var(--err); }
   padding: 4px 6px;
 }
 .dash-edit:hover, .dash-edit:focus { border-color: var(--border); background: var(--card); }
+
+/* narrow screens: dashboard tabs become a horizontal strip */
+@media (max-width: 700px) {
+  #dashboard { padding: 10px; }
+  .dash-body { flex-direction: column; }
+  .dash-nav { flex-direction: row; width: 100%; overflow-x: auto; }
+  .dash-tab { width: auto; white-space: nowrap; }
+}
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
