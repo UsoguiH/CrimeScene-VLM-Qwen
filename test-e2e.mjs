@@ -2,9 +2,10 @@
 // Headline requirement: a click registers to the dashboard in UNDER 2 SECONDS.
 import puppeteer from 'puppeteer-core';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const APP_DIR = new URL('.', import.meta.url).pathname.replace(/^\//, '').replace(/\/$/, '');
+const APP_DIR = fileURLToPath(new URL('.', import.meta.url));
 
 // self-host the app server so the test never depends on an external process
 const serverUp = async () => {
@@ -13,7 +14,7 @@ const serverUp = async () => {
 };
 let serverProc = null;
 if (!(await serverUp())) {
-  serverProc = spawn(process.execPath, [`${APP_DIR}/server.mjs`], { stdio: 'ignore' });
+  serverProc = spawn(process.execPath, [`${APP_DIR}server.mjs`], { stdio: 'ignore' });
   for (let i = 0; i < 20 && !(await serverUp()); i++) await new Promise((r) => setTimeout(r, 300));
 }
 if (!(await serverUp())) {
