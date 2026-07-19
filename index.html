@@ -23,6 +23,11 @@
 
 <main>
   <section class="stage-col">
+    <div class="findbar">
+      <input id="find-input" placeholder='find anything — e.g. "knife", "red bottle", "shell casing"' autocomplete="off">
+      <button id="btn-find" title="Qwen3-VL open-vocabulary search — finds objects beyond the 80 detector classes">🔍 Find</button>
+      <button id="btn-scan" title="Qwen3-VL locates every object and registers them all">📸 Scan scene</button>
+    </div>
     <div id="stage">
       <video id="video" playsinline muted></video>
       <canvas id="frame"></canvas>
@@ -132,23 +137,55 @@
 <div id="dashboard" hidden>
   <div class="dash-inner">
     <div class="dash-head">
-      <h1>📋 EVIDENCE REGISTRY</h1>
-      <label class="toggle"><input type="checkbox" id="auto-id-toggle" checked> auto-identify with VLM</label>
-      <div class="dash-actions">
-        <button id="btn-export-json" class="mini">⬇ JSON</button>
-        <button id="btn-export-csv" class="mini">⬇ CSV</button>
-        <button id="btn-clear-registry" class="mini">🗑 clear all</button>
-        <button id="btn-dash-close" class="mini">✕ close</button>
-      </div>
+      <h1>📋 EVIDENCE DASHBOARD</h1>
+      <span class="dim" id="dash-sub"></span>
+      <button id="btn-dash-close" class="mini">✕ close</button>
     </div>
-    <div class="dash-stats" id="dash-stats"></div>
-    <div class="dash-table-wrap">
-      <table class="dash-table">
-        <thead>
-          <tr><th></th><th>ID</th><th>Name</th><th>AI identification</th><th>Size</th><th>Registered</th><th>Notes</th><th></th></tr>
-        </thead>
-        <tbody id="dash-tbody"></tbody>
-      </table>
+    <div class="dash-body">
+      <nav class="dash-nav">
+        <button class="dash-tab active" data-tab="registry">📋 Registry</button>
+        <button class="dash-tab" data-tab="gallery">🖼 Gallery</button>
+        <button class="dash-tab" data-tab="stats">📊 Stats</button>
+        <button class="dash-tab" data-tab="export">📤 Export</button>
+      </nav>
+      <div class="dash-content">
+
+        <section id="dash-tab-registry">
+          <div class="dash-toolbar">
+            <label class="toggle"><input type="checkbox" id="auto-id-toggle" checked> auto-identify new items with Qwen</label>
+            <span class="dim" id="dash-stats"></span>
+          </div>
+          <div class="dash-table-wrap">
+            <table class="dash-table">
+              <thead>
+                <tr><th></th><th>ID</th><th>Name</th><th>Category</th><th>AI details</th><th>Size</th><th>Registered</th><th>Notes</th><th></th></tr>
+              </thead>
+              <tbody id="dash-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="dash-tab-gallery" hidden>
+          <div class="gallery-grid" id="gallery-grid"></div>
+        </section>
+
+        <section id="dash-tab-stats" hidden>
+          <div class="stat-tiles" id="stat-tiles"></div>
+          <h3 class="stats-h">Items by category</h3>
+          <div class="cat-bars" id="cat-bars"></div>
+        </section>
+
+        <section id="dash-tab-export" hidden>
+          <div class="export-panel">
+            <p class="dim">The registry lives in this browser's localStorage. Export it for the record:</p>
+            <button id="btn-export-json">⬇ Download JSON</button>
+            <button id="btn-export-csv">⬇ Download CSV (name, category, color, material, condition, markings, OCR text, sizes…)</button>
+            <hr>
+            <button id="btn-clear-registry" class="danger">🗑 Delete all registered items</button>
+          </div>
+        </section>
+
+      </div>
     </div>
   </div>
 </div>
