@@ -167,16 +167,77 @@ try {
   const aiText = await page.evaluate(
     () => document.querySelector('#dash-tbody .dash-ai')?.textContent.trim().slice(0, 90) || '(empty)');
   check('Qwen identified item on dashboard', aiOk, aiText);
+
+  // structured record: category + details stored on the item
+  check('structured record has category', await page
+    .waitForFunction(() => {
+      try { return JSON.parse(localStorage.getItem('ev.registry') || '[]').some((it) => it.category); }
+      catch { return false; }
+    }, { timeout: 30000 }).then(() => true).catch(() => false),
+  await page.evaluate(() => {
+    const r = JSON.parse(localStorage.getItem('ev.registry') || '[]');
+    const it = r.find((x) => x.category);
+    return it ? `${it.name} [${it.category}] ${it.details?.color || ''}`.slice(0, 70) : '(none)';
+  }));
+
+  // ---------- 6b. dashboard side tabs ----------
+  await page.click('.dash-tab[data-tab="gallery"]');
+  check('gallery tab renders cards', await page
+    .waitForFunction(() => !document.getElementById('dash-tab-gallery').hidden
+      && document.querySelectorAll('#gallery-grid .gallery-card').length > 0, { timeout: 5000 })
+    .then(() => true).catch(() => false));
+  await page.click('.dash-tab[data-tab="stats"]');
+  check('stats tab renders tiles + bars', await page
+    .waitForFunction(() => !document.getElementById('dash-tab-stats').hidden
+      && document.querySelectorAll('#stat-tiles .stat-tile').length >= 4
+      && document.querySelectorAll('#cat-bars .cat-bar').length > 0, { timeout: 5000 })
+    .then(() => true).catch(() => false));
+  await page.click('.dash-tab[data-tab="export"]');
+  check('export tab visible', await page.evaluate(() => !document.getElementById('dash-tab-export').hidden));
   const errsBefore = errors.length;
   await page.click('#btn-export-json');
   await page.click('#btn-export-csv');
   await new Promise((r) => setTimeout(r, 800));
   check('JSON/CSV export click no errors', errors.length === errsBefore);
+  await page.click('.dash-tab[data-tab="registry"]');
   await page.click('#btn-dash-close');
 
-  // ---------- 7. second item, also < 2s ----------
-  const r2 = await timedRegister(page, 0.35, 0.85, 2); // remotes at the bottom
-  check('second item < 2s', r2.ok && r2.ms <= 2000, `${r2.ms}ms, count=${await dashCount(page)}`);
+  // ---------- 6c. find-by-text (Qwen open-vocabulary grounding) ----------
+  await page.evaluate(() => document.getElementById('stage').scrollIntoView({ block: 'start' }));
+  await page.type('#find-input', 'cat');
+  await page.click('#btn-find');
+  const findOk = await page
+    .waitForFunction(() => window.__evidence && window.__evidence.qwenBoxes.length > 0, { timeout: 60000 })
+    .then(() => true).catch(() => false);
+  check('find-by-text returns grounded boxes', findOk,
+    `found ${await page.evaluate(() => window.__evidence?.qwenBoxes.length ?? 0)} × "cat"`);
+  let foundRegOk = false;
+  if (findOk) {
+    const frac = await page.evaluate(() => {
+      const q = window.__evidence.qwenBoxes[0];
+      const s = window.__evidence;
+      return { fx: ((q.x1 + q.x2) / 2) / s.captureW, fy: ((q.y1 + q.y2) / 2) / s.captureH };
+    });
+    const before = await dashCount(page);
+    await clickStage(page, frac.fx, frac.fy);
+    foundRegOk = await page
+      .waitForFunction((n) => parseInt(document.getElementById('dash-count').textContent, 10) > n, { timeout: 5000 }, before)
+      .then(() => true).catch(() => false);
+  }
+  check('found box registers on click', foundRegOk, `count=${await dashCount(page)}`);
+
+  // ---------- 6d. scan scene (Qwen bulk registration) ----------
+  const beforeScan = await dashCount(page);
+  await page.click('#btn-scan');
+  const scanOk = await page
+    .waitForFunction((n) => parseInt(document.getElementById('dash-count').textContent, 10) >= n + 2, { timeout: 90000 }, beforeScan)
+    .then(() => true).catch(() => false);
+  check('scan scene bulk-registers items', scanOk, `count ${beforeScan} -> ${await dashCount(page)}`);
+
+  // ---------- 7. one more manual click, also < 2s ----------
+  const cur = await dashCount(page);
+  const r2 = await timedRegister(page, 0.35, 0.85, cur + 1); // remotes at the bottom
+  check('manual click still < 2s', r2.ok && r2.ms <= 2000, `${r2.ms}ms, count=${await dashCount(page)}`);
 
   // in-app latency proof from the [timing] console instrumentation
   const appTimings = timingLogs.slice();
