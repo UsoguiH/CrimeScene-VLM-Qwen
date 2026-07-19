@@ -2,6 +2,7 @@
 import {
   REFERENCE_PRESETS, focalPx, pxToMm, formatMm, formatSize,
 } from './measure.js';
+import { ground, scanScene, identifyStructured, toPixels, DEFAULT_MODEL } from './qwen.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -31,6 +32,9 @@ const els = {
   btnDashClose: $('btn-dash-close'), dashTbody: $('dash-tbody'), dashStats: $('dash-stats'),
   btnExportJson: $('btn-export-json'), btnExportCsv: $('btn-export-csv'),
   btnClearRegistry: $('btn-clear-registry'), autoIdToggle: $('auto-id-toggle'),
+  findInput: $('find-input'), btnFind: $('btn-find'), btnScan: $('btn-scan'),
+  dashSub: $('dash-sub'), galleryGrid: $('gallery-grid'),
+  statTiles: $('stat-tiles'), catBars: $('cat-bars'),
 };
 
 const PALETTE = ['#22d3ee', '#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#60a5fa', '#fb7185'];
@@ -53,8 +57,12 @@ const S = {
   vlmBytes: new Map(),
   registry: [],           // persisted evidence items
   detSize: 'nano',
+  qwenBoxes: [],          // find-by-text / scan results (capture-px), click to register
+  qwenBusy: false,
+  dashTab: 'registry',
   jobs: new Map(), nextJobId: 1,
 };
+window.__evidence = S; // debug/testing handle
 
 let frameCtx, overlayCtx;
 
@@ -297,6 +305,27 @@ function drawOverlay() {
     ctx.fillText(text, tx + 6, ty);
   }
 
+  // Qwen find/scan results — fuchsia dashed, click to register
+  if (S.qwenBoxes.length) {
+    ctx.strokeStyle = '#e879f9';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 4]);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    for (const q of S.qwenBoxes) {
+      ctx.strokeRect(q.x1, q.y1, q.x2 - q.x1, q.y2 - q.y1);
+      const text = `✨ ${q.label} — click to register`;
+      const tw = ctx.measureText(text).width + 10;
+      const ty = q.y1 > 20 ? q.y1 - 18 : q.y1 + 2;
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(8,12,16,0.88)';
+      ctx.fillRect(q.x1, ty, tw, 17);
+      ctx.fillStyle = '#e879f9';
+      ctx.fillText(text, q.x1 + 5, ty + 13);
+      ctx.setLineDash([6, 4]);
+    }
+    ctx.setLineDash([]);
+  }
+
   // calibration reference line (persists once calibrated)
   if (S.calib.refLine) {
     const [a, b] = S.calib.refLine;
@@ -457,9 +486,21 @@ function snapClickFrame() {
   clickSnap.getContext('2d').drawImage(els.frame, 0, 0);
 }
 
-// Map a click to an object box: smallest detection box containing the point,
-// else the nearest one, else a fixed region around the click. Never fails.
+// Map a click to an object box: Qwen find/scan results take priority (they're
+// what the user asked for), then the smallest detection box containing the
+// point, else the nearest one, else a fixed region around the click.
 function boxForClick(x, y) {
+  let bestQ = null, bestQArea = Infinity;
+  for (const q of S.qwenBoxes) {
+    if (x >= q.x1 && x <= q.x2 && y >= q.y1 && y <= q.y2) {
+      const a = (q.x2 - q.x1) * (q.y2 - q.y1);
+      if (a < bestQArea) { bestQArea = a; bestQ = q; }
+    }
+  }
+  if (bestQ) {
+    S.qwenBoxes = S.qwenBoxes.filter((q) => q !== bestQ);
+    return { ...bestQ, score: null };
+  }
   let best = null, bestArea = Infinity;
   for (const d of S.detections) {
     if (x >= d.x1 && x <= d.x2 && y >= d.y1 && y <= d.y2) {
@@ -682,42 +723,29 @@ function registerEvidence(m, calib) {
   if (willIdentify) identifyItem(item, m);
 }
 
+// Structured evidence record via Qwen: name, category, color, material,
+// condition, markings, and OCR'd visible text — stored on the item.
 async function identifyItem(item, m) {
-  const key = els.apiKey.value.trim();
-  if (!key) return;
+  const creds = els.apiKey.value.trim()
+    ? { apiKey: els.apiKey.value.trim(), model: els.apiModel.value.trim() || DEFAULT_MODEL }
+    : null;
+  if (!creds) return;
   const crop = m ? thumbFromCorners(m.corners, 384) : item.thumb;
   if (!crop) return;
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-Title': 'Evidence Live Detection Demo' },
-      body: JSON.stringify({
-        model: els.apiModel.value.trim() || 'qwen/qwen3-vl-235b-a22b-instruct',
-        max_tokens: 80,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: crop } },
-            { type: 'text', text: 'Identify the main object in this photo for an evidence log. Reply with ONE line only: precise object name — color, material/condition, distinguishing marks. Be specific and factual.' },
-          ],
-        }],
-      }),
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const j = await res.json();
-    const text = j.choices?.[0]?.message?.content?.trim();
-    if (text) {
-      item.aiDesc = text;
-      // adopt Qwen's precise name for the item, on-screen and in the registry
-      const shortName = text.split(/[—:\n]|\s-\s/)[0].trim();
-      if (shortName.length >= 3 && shortName.length <= 42) {
-        item.name = shortName;
-        if (m) { m.name = shortName; renderMeasureList(); }
-      }
-      saveRegistry();
-      renderDashboard();
-      toast(`${item.id} · Qwen: ${(shortName || text).slice(0, 60)}`);
+    const d = await identifyStructured({ ...creds, image: crop });
+    item.details = d;
+    item.category = d.category;
+    item.aiDesc = [d.color, d.material, d.condition].filter(Boolean).join(', ')
+      + (d.markings ? ` — ${d.markings}` : '')
+      + (d.visible_text ? ` — text: "${d.visible_text}"` : '');
+    if (d.name && d.name.length >= 3) {
+      item.name = d.name;
+      if (m) { m.name = d.name; renderMeasureList(); }
     }
+    saveRegistry();
+    renderDashboard();
+    toast(`${item.id} · Qwen: ${d.name || 'identified'}${d.category ? ` (${d.category})` : ''}`);
   } catch (err) {
     console.warn('auto-ID failed for', item.id, err);
     toast(`${item.id}: VLM identification failed (${err.message})`);
@@ -728,12 +756,31 @@ function updateDashCount() {
   els.dashCount.textContent = S.registry.length;
 }
 
+function switchDashTab(tab) {
+  S.dashTab = tab;
+  for (const btn of els.dashboard.querySelectorAll('.dash-tab')) {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  }
+  for (const sec of els.dashboard.querySelectorAll('.dash-content > section')) {
+    sec.hidden = sec.id !== `dash-tab-${tab}`;
+  }
+  renderDashboard();
+}
+
 function renderDashboard() {
   if (els.dashboard.hidden) return;
   const sized = S.registry.filter((it) => it.longMm != null).length;
-  els.dashStats.textContent =
-    `${S.registry.length} item${S.registry.length === 1 ? '' : 's'} registered · ` +
-    `${sized} with real-world size · stored locally in this browser`;
+  els.dashSub.textContent =
+    `${S.registry.length} item${S.registry.length === 1 ? '' : 's'} · ${sized} with real-world size · stored locally`;
+  if (S.dashTab === 'registry') renderRegistryTab(sized);
+  else if (S.dashTab === 'gallery') renderGalleryTab();
+  else if (S.dashTab === 'stats') renderStatsTab(sized);
+}
+
+function renderRegistryTab(sized) {
+  els.dashStats.textContent = sized < S.registry.length && S.registry.length
+    ? `${S.registry.length - sized} item${S.registry.length - sized === 1 ? '' : 's'} without real-world size — calibrate to fix`
+    : '';
   els.dashTbody.innerHTML = '';
   for (const item of [...S.registry].reverse()) {
     const tr = document.createElement('tr');
@@ -759,6 +806,11 @@ function renderDashboard() {
     nameInput.onchange = () => { item.name = nameInput.value.trim() || item.name; saveRegistry(); };
     tdName.appendChild(nameInput);
     tr.appendChild(tdName);
+
+    const tdCat = document.createElement('td');
+    tdCat.className = 'dash-time';
+    tdCat.textContent = item.category || '—';
+    tr.appendChild(tdCat);
 
     const tdAi = document.createElement('td');
     tdAi.className = 'dash-ai';
@@ -807,6 +859,105 @@ function renderDashboard() {
   }
 }
 
+function renderGalleryTab() {
+  els.galleryGrid.innerHTML = '';
+  if (!S.registry.length) {
+    els.galleryGrid.innerHTML = '<div class="empty">nothing registered yet — click objects in the live view</div>';
+    return;
+  }
+  for (const item of [...S.registry].reverse()) {
+    const card = document.createElement('div');
+    card.className = 'gallery-card';
+    if (item.thumb) {
+      const img = document.createElement('img');
+      img.src = item.thumb;
+      card.appendChild(img);
+    }
+    const body = document.createElement('div');
+    body.className = 'g-body';
+    const name = document.createElement('div');
+    name.className = 'g-name';
+    name.textContent = `${item.id} · ${item.name}`;
+    body.appendChild(name);
+    if (item.category) {
+      const cat = document.createElement('span');
+      cat.className = 'g-cat';
+      cat.textContent = item.category;
+      body.appendChild(cat);
+    }
+    const size = document.createElement('div');
+    size.className = 'g-size';
+    size.textContent = item.longMm != null
+      ? formatSize(item.longMm, item.shortMm)
+      : `${item.longPx}×${item.shortPx} px`;
+    body.appendChild(size);
+    const meta = document.createElement('div');
+    meta.className = 'g-meta';
+    meta.textContent = item.aiDesc ? item.aiDesc.slice(0, 90) : new Date(item.t).toLocaleString();
+    body.appendChild(meta);
+    card.appendChild(body);
+    els.galleryGrid.appendChild(card);
+  }
+}
+
+function renderStatsTab(sized) {
+  const cats = new Map();
+  for (const it of S.registry) {
+    const c = it.category || 'unclassified';
+    cats.set(c, (cats.get(c) || 0) + 1);
+  }
+  const identified = S.registry.filter((it) => it.aiDesc).length;
+  const withText = S.registry.filter((it) => it.details?.visible_text).length;
+  const tiles = [
+    [S.registry.length, 'items registered'],
+    [sized, 'with real-world size'],
+    [identified, 'identified by Qwen'],
+    [cats.size, 'categories'],
+    [withText, 'with readable text (OCR)'],
+  ];
+  els.statTiles.innerHTML = '';
+  for (const [value, label] of tiles) {
+    const tile = document.createElement('div');
+    tile.className = 'stat-tile';
+    const v = document.createElement('div');
+    v.className = 'st-value';
+    v.textContent = value;
+    const l = document.createElement('div');
+    l.className = 'st-label';
+    l.textContent = label;
+    tile.appendChild(v);
+    tile.appendChild(l);
+    els.statTiles.appendChild(tile);
+  }
+  els.catBars.innerHTML = '';
+  const entries = [...cats.entries()].sort((a, b) => b[1] - a[1]);
+  const max = entries[0]?.[1] || 1;
+  if (!entries.length) {
+    els.catBars.innerHTML = '<div class="empty">no items yet</div>';
+    return;
+  }
+  for (const [cat, count] of entries) {
+    const row = document.createElement('div');
+    row.className = 'cat-bar';
+    const label = document.createElement('span');
+    label.className = 'cb-label';
+    label.textContent = cat;
+    const track = document.createElement('div');
+    track.className = 'cb-track';
+    const fill = document.createElement('div');
+    fill.className = 'cb-fill';
+    fill.style.width = `${(count / max) * 100}%`;
+    track.appendChild(fill);
+    const value = document.createElement('span');
+    value.className = 'cb-value';
+    value.textContent = count;
+    row.appendChild(label);
+    row.appendChild(track);
+    row.appendChild(value);
+    els.catBars.appendChild(row);
+  }
+}
+
 function blobDownload(content, filename, mime) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -821,9 +972,11 @@ const csvEscape = (v) => {
 };
 
 function exportCsv() {
-  const cols = ['id', 'name', 'ai_identification', 'long_mm', 'short_mm', 'long_px', 'short_px', 'confidence_pct', 'calibration', 'registered_at', 'notes'];
+  const cols = ['id', 'name', 'category', 'color', 'material', 'condition', 'markings', 'visible_text',
+    'long_mm', 'short_mm', 'long_px', 'short_px', 'confidence_pct', 'calibration', 'registered_at', 'notes'];
   const rows = S.registry.map((it) => [
-    it.id, it.name, it.aiDesc || '',
+    it.id, it.name, it.category || '', it.details?.color || '', it.details?.material || '',
+    it.details?.condition || '', it.details?.markings || '', it.details?.visible_text || '',
     it.longMm != null ? it.longMm.toFixed(1) : '', it.shortMm != null ? it.shortMm.toFixed(1) : '',
     it.longPx, it.shortPx, it.conf ?? it.maskIoU ?? '', it.calib, it.t, it.notes,
   ]);
@@ -846,13 +999,72 @@ function updateVlmUi() {
   els.vlmControls.hidden = api ? !els.apiKey.value.trim() : S.vlmState !== 'ready';
 }
 
-function frameToJpeg(maxSide) {
+function frameToJpegMeta(maxSide) {
   const scale = Math.min(1, maxSide / Math.max(S.captureW, S.captureH));
   const c = document.createElement('canvas');
   c.width = Math.round(S.captureW * scale);
   c.height = Math.round(S.captureH * scale);
   c.getContext('2d').drawImage(els.frame, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.88);
+  return { url: c.toDataURL('image/jpeg', 0.88), w: c.width, h: c.height };
+}
+
+function frameToJpeg(maxSide) {
+  return frameToJpegMeta(maxSide).url;
+}
+
+function qwenCreds() {
+  const apiKey = els.apiKey.value.trim();
+  if (!apiKey) { toast('Set an OpenRouter API key in the VLM panel first'); return null; }
+  return { apiKey, model: els.apiModel.value.trim() || DEFAULT_MODEL };
+}
+
+// Find-by-text: Qwen3-VL open-vocabulary grounding -> clickable boxes.
+async function findByText() {
+  const query = els.findInput.value.trim();
+  if (!query || S.qwenBusy) return;
+  const creds = qwenCreds();
+  if (!creds) return;
+  S.qwenBusy = true;
+  els.btnFind.disabled = els.btnScan.disabled = true;
+  els.btnFind.textContent = '⏳ finding…';
+  try {
+    const sent = frameToJpegMeta(1024);
+    const entries = await ground({ ...creds, image: sent.url, query });
+    S.qwenBoxes = toPixels(entries, S.captureW, S.captureH, sent.w, sent.h);
+    toast(entries.length
+      ? `Qwen found ${entries.length} × "${query}" — click a ✨ box to register`
+      : `Qwen: no "${query}" in view`);
+  } catch (err) {
+    toast('Find failed: ' + err.message);
+  } finally {
+    S.qwenBusy = false;
+    els.btnFind.disabled = els.btnScan.disabled = false;
+    els.btnFind.textContent = '🔍 Find';
+  }
+}
+
+// Scan-scene: Qwen locates every object; all are registered in one go.
+async function scanSceneNow() {
+  if (S.qwenBusy) return;
+  const creds = qwenCreds();
+  if (!creds) return;
+  S.qwenBusy = true;
+  els.btnFind.disabled = els.btnScan.disabled = true;
+  els.btnScan.textContent = '⏳ scanning…';
+  try {
+    const sent = frameToJpegMeta(1024);
+    const entries = await scanScene({ ...creds, image: sent.url });
+    const boxes = toPixels(entries, S.captureW, S.captureH, sent.w, sent.h).slice(0, 12);
+    if (!boxes.length) { toast('Qwen found no objects to register'); return; }
+    for (const b of boxes) registerBox({ ...b, score: null });
+    toast(`📸 Scene scanned — ${boxes.length} item${boxes.length === 1 ? '' : 's'} registered`);
+  } catch (err) {
+    toast('Scan failed: ' + err.message);
+  } finally {
+    S.qwenBusy = false;
+    els.btnFind.disabled = els.btnScan.disabled = false;
+    els.btnScan.textContent = '📸 Scan scene';
+  }
 }
 
 async function analyzeApi() {
@@ -1003,7 +1215,7 @@ function wireUi() {
   });
 
   els.btnSnapshot.onclick = snapshot;
-  els.btnClear.onclick = () => { S.measurements = []; renderMeasureList(); };
+  els.btnClear.onclick = () => { S.measurements = []; S.qwenBoxes = []; renderMeasureList(); };
 
   els.threshold.oninput = () => {
     S.threshold = parseFloat(els.threshold.value);
@@ -1115,12 +1327,20 @@ function wireUi() {
     }
   };
 
+  // Qwen find & scan
+  els.btnFind.onclick = findByText;
+  els.findInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') findByText(); });
+  els.btnScan.onclick = scanSceneNow;
+
   // dashboard
   els.btnDashboard.onclick = () => {
     els.dashboard.hidden = !els.dashboard.hidden;
     renderDashboard();
   };
   els.btnDashClose.onclick = () => { els.dashboard.hidden = true; };
+  for (const btn of els.dashboard.querySelectorAll('.dash-tab')) {
+    btn.onclick = () => switchDashTab(btn.dataset.tab);
+  }
   els.btnExportJson.onclick = exportJson;
   els.btnExportCsv.onclick = exportCsv;
   els.btnClearRegistry.onclick = () => {
